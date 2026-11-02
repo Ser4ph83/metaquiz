@@ -2,18 +2,22 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import Join from './pages/Join';
 import Host from './pages/Host';
 import Player from './pages/Player';
+import Admin from './pages/Admin';
 
 function App() {
   return (
     <BrowserRouter>
       <Routes>
-        {/* A rota '/' é a página inicial onde o aluno acessa */}
+        {/* Entrada do Aluno */}
         <Route path="/" element={<Join />} />
         
-        {/* A rota '/host' é o painel do telão */}
+        {/* Painel de Criação e Gestão (Bastidores) */}
+        <Route path="/admin" element={<Admin />} />
+        
+        {/* Tela do Telão (Projetor) */}
         <Route path="/host" element={<Host />} />
         
-        {/* A rota '/player' é a tela de jogo do aluno */}
+        {/* Tela do Celular do Aluno */}
         <Route path="/player" element={<Player />} />
       </Routes>
     </BrowserRouter>
