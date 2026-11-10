@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabase';
 
 export default function Host() {
@@ -9,18 +10,28 @@ export default function Host() {
   const [currentQIndex, setCurrentQIndex] = useState(-1);
   const [error, setError] = useState('');
   const [timeLeft, setTimeLeft] = useState(0);
-  const [leaderboard, setLeaderboard] = useState([]); // Guarda o ranking final
-
+  const [leaderboard, setLeaderboard] = useState([]);
+  
+  const navigate = useNavigate();
   const showResults = timeLeft === 0 && currentQIndex >= 0;
 
   const openLobby = async (e) => {
     e.preventDefault();
     setError('');
+    
+    // 1. Localiza a sala pelo PIN
     const { data, error } = await supabase.from('quizzes').select('*').eq('pin', pin).single();
-    if (error || !data) return setError('PIN não encontrado.');
+    if (error || !data) return setError('PIN não encontrado. Verifique se digitou certo.');
+    
     setQuiz(data);
-    const { data: existingPlayers } = await supabase.from('players').select('*').eq('quiz_id', data.id);
-    if (existingPlayers) setPlayers(existingPlayers);
+
+    // 2. LIMPEZA AUTOMÁTICA: Apaga respostas e alunos de partidas anteriores
+    await supabase.from('answers').delete().eq('quiz_id', data.id);
+    await supabase.from('players').delete().eq('quiz_id', data.id);
+    await supabase.from('quizzes').update({ current_step: -1 }).eq('id', data.id);
+    
+    // 3. Garante que a lista comece zerada no estado local
+    setPlayers([]);
   };
 
   useEffect(() => {
@@ -41,11 +52,18 @@ export default function Host() {
       setTimeLeft(data[0].time_limit);
       await supabase.from('quizzes').update({ current_step: 0 }).eq('id', quiz.id);
     } else {
-      alert('Nenhuma pergunta cadastrada!');
+      alert('Nenhuma pergunta cadastrada nesta sala!');
     }
   };
 
-  // Motor de Cálculo do Pódio
+  // Zera as respostas no banco e reinicia a partida para o Lobby
+  const restartGame = async () => {
+    await supabase.from('answers').delete().eq('quiz_id', quiz.id);
+    await supabase.from('quizzes').update({ current_step: -1 }).eq('id', quiz.id);
+    setCurrentQIndex(-1);
+    setLeaderboard([]);
+  };
+
   const generateLeaderboard = async () => {
     const { data: allAnswers } = await supabase.from('answers').select('*').eq('quiz_id', quiz.id);
     
@@ -56,7 +74,6 @@ export default function Host() {
       allAnswers.forEach(ans => {
         const question = questions[ans.question_index];
         if (question && ans.selected_option === question.correct_answer) {
-          // Fórmula: 500 pontos por acertar + bônus de velocidade (até 500)
           const timeRatio = Math.max(0, question.time_limit - ans.reaction_time) / question.time_limit;
           const points = Math.round(500 + (500 * timeRatio));
           if (scores[ans.player_id]) scores[ans.player_id].score += points;
@@ -64,7 +81,6 @@ export default function Host() {
       });
     }
 
-    // Ordena do maior para o menor
     const sorted = Object.values(scores).sort((a, b) => b.score - a.score);
     setLeaderboard(sorted);
   };
@@ -78,7 +94,7 @@ export default function Host() {
     } else {
       await generateLeaderboard();
       await supabase.from('quizzes').update({ current_step: -2 }).eq('id', quiz.id);
-      setCurrentQIndex(-2); // -2 é a tela do Pódio
+      setCurrentQIndex(-2);
     }
   };
 
@@ -89,98 +105,188 @@ export default function Host() {
     }
   }, [timeLeft, currentQIndex]);
 
+  // 1. TELA DE BUSCA DE PIN
   if (!quiz) {
     return (
-      <div style={{ textAlign: 'center', marginTop: '100px', fontFamily: 'sans-serif' }}>
-        <h1>🖥️ Telão do Professor</h1>
-        <form onSubmit={openLobby}>
-          <input type="text" placeholder="PIN" value={pin} onChange={(e) => setPin(e.target.value)} style={{ fontSize: '24px', padding: '10px', textAlign: 'center' }} />
-          <br/><br/>
-          <button type="submit" style={{ fontSize: '20px', padding: '10px 40px', cursor: 'pointer' }}>Abrir Lobby</button>
-        </form>
-        {error && <p style={{ color: 'red' }}>{error}</p>}
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-900 via-indigo-900 to-purple-900 p-4 font-sans text-white">
+        <div className="bg-white/10 backdrop-blur-md p-10 rounded-3xl border border-white/20 shadow-2xl max-w-md w-full text-center">
+          <h1 className="text-4xl font-black mb-2">🖥️ Telão Host</h1>
+          <p className="text-blue-200 mb-8 font-medium">Projeção de Sala Interativa</p>
+          
+          <form onSubmit={openLobby} className="space-y-6">
+            <input 
+              type="text" 
+              placeholder="Digite o PIN" 
+              value={pin} 
+              onChange={(e) => setPin(e.target.value)} 
+              className="w-full text-center text-4xl tracking-widest font-black py-4 bg-white/20 border-2 border-white/30 rounded-2xl outline-none focus:border-white focus:bg-white/30 transition-all text-white placeholder-blue-200" 
+            />
+            <button 
+              type="submit" 
+              className="w-full py-4 text-xl font-black bg-emerald-500 hover:bg-emerald-400 text-gray-900 rounded-2xl shadow-lg transition-transform transform hover:scale-105 cursor-pointer"
+            >
+              Abrir Lobby 🚀
+            </button>
+          </form>
+          {error && <p className="mt-4 text-red-300 font-bold bg-red-900/50 p-3 rounded-xl border border-red-500/30">{error}</p>}
+        </div>
       </div>
     );
   }
 
-  // TELA FINAL: O Pódio
+  // 2. TELA FINAL: PÓDIO COM NAVEGAÇÃO DE RETORNO
   if (currentQIndex === -2) {
     return (
-      <div style={{ textAlign: 'center', padding: '50px', fontFamily: 'sans-serif', background: '#222', minHeight: '100vh', color: '#fff' }}>
-        <h1 style={{ fontSize: '60px', color: '#ffd700', marginBottom: '40px' }}>🏆 PÓDIO FINAL 🏆</h1>
-        
-        <div style={{ maxWidth: '600px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '15px' }}>
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-6 font-sans text-white">
+        <div className="text-center mb-10 animate-bounce">
+          <h1 className="text-6xl font-black text-amber-400 tracking-tight drop-shadow-lg">🏆 PÓDIO FINAL 🏆</h1>
+          <p className="text-slate-400 text-xl mt-2 font-medium">Parabéns aos vencedores da partida!</p>
+        </div>
+
+        <div className="max-w-2xl w-full space-y-4 mb-10">
           {leaderboard.map((player, index) => {
-            // Cores das medalhas
-            const bg = index === 0 ? '#ffd700' : index === 1 ? '#c0c0c0' : index === 2 ? '#cd7f32' : '#444';
-            const color = index < 3 ? '#000' : '#fff';
-            
+            const styles = [
+              "bg-gradient-to-r from-amber-400 to-yellow-500 text-slate-950 scale-105 shadow-amber-500/20",
+              "bg-gradient-to-r from-slate-300 to-slate-400 text-slate-950 shadow-slate-400/20",
+              "bg-gradient-to-r from-amber-700 to-amber-800 text-white shadow-amber-800/20",
+              "bg-slate-800 text-slate-200 border border-slate-700"
+            ];
+            const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}º`;
+            const currentStyle = styles[index] || styles[3];
+
             return (
-              <div key={index} style={{ background: bg, color: color, padding: '20px 30px', borderRadius: '12px', fontSize: '30px', fontWeight: 'bold', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span>{index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}º`} {player.name}</span>
-                <span>{player.score} pts</span>
+              <div 
+                key={index} 
+                className={`p-6 rounded-2xl font-black text-2xl flex items-center justify-between shadow-xl transition-all ${currentStyle}`}
+              >
+                <span className="flex items-center gap-4">
+                  <span className="text-3xl">{medal}</span>
+                  <span>{player.name}</span>
+                </span>
+                <span className="font-mono tracking-wider">{player.score} pts</span>
               </div>
             );
           })}
         </div>
+
+        {/* Barra de Ações Pós-Jogo */}
+        <div className="flex flex-wrap gap-4 justify-center max-w-2xl w-full">
+          <button 
+            onClick={restartGame}
+            className="flex-1 min-w-[200px] py-4 font-black text-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-2xl shadow-xl transition-all transform active:scale-95 cursor-pointer"
+          >
+            🔄 Jogar Novamente
+          </button>
+          <button 
+            onClick={() => { setQuiz(null); setPin(''); setCurrentQIndex(-1); }}
+            className="flex-1 min-w-[200px] py-4 font-black text-lg bg-slate-800 hover:bg-slate-700 text-white border border-slate-700 rounded-2xl shadow-xl transition-all transform active:scale-95 cursor-pointer"
+          >
+            🖥️ Digitar Outro PIN
+          </button>
+          <button 
+            onClick={() => navigate('/admin')}
+            className="flex-1 min-w-[200px] py-4 font-black text-lg bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl shadow-xl transition-all transform active:scale-95 cursor-pointer"
+          >
+            👨‍🏫 Ir para o Admin
+          </button>
+        </div>
       </div>
     );
   }
 
-  // TELA DO JOGO (Rodando ou Resultado da Pergunta)
+  // 3. TELA DA PERGUNTA (EM ANDAMENTO OU RESULTADO)
   if (currentQIndex >= 0) {
     const question = questions[currentQIndex];
-    const colors = ['#e21b3c', '#1368ce', '#d89e00', '#26890c'];
+    const bgColors = ['bg-red-600', 'bg-blue-600', 'bg-amber-500', 'bg-emerald-600'];
 
     return (
-      <div style={{ textAlign: 'center', padding: '40px', fontFamily: 'sans-serif', background: '#f8f9fa', minHeight: '100vh' }}>
-        <div style={{ background: '#fff', padding: '30px', borderRadius: '15px', boxShadow: '0 4px 10px rgba(0,0,0,0.1)', maxWidth: '1000px', margin: '0 auto 30px auto' }}>
-          <h2 style={{ fontSize: '45px', margin: 0, color: '#333' }}>{question.question_text}</h2>
+      <div className="min-h-screen bg-slate-100 flex flex-col p-6 font-sans text-slate-800 justify-between">
+        <div className="bg-white p-8 rounded-3xl shadow-lg border border-slate-200 text-center max-w-5xl w-full mx-auto">
+          <span className="text-sm font-bold text-slate-400 uppercase tracking-widest block mb-2">Pergunta {currentQIndex + 1} de {questions.length}</span>
+          <h2 className="text-4xl font-extrabold text-slate-800">{question.question_text}</h2>
         </div>
-        
-        {!showResults ? (
-           <div style={{ fontSize: '80px', margin: '20px 0', fontWeight: 'bold', color: timeLeft <= 5 ? 'red' : 'black' }}>
-             ⏱️ {timeLeft}
-           </div>
-        ) : (
-           <div style={{ fontSize: '50px', margin: '20px 0', fontWeight: 'bold', color: '#333' }}>Tempo Esgotado!</div>
-        )}
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', maxWidth: '1000px', margin: '30px auto' }}>
+        <div className="text-center my-6">
+          {!showResults ? (
+            <div className={`inline-flex items-center gap-3 px-8 py-4 rounded-full font-black text-5xl shadow-md transition-colors ${timeLeft <= 5 ? 'bg-red-500 text-white animate-pulse' : 'bg-slate-900 text-white'}`}>
+              <span>⏱️</span>
+              <span>{timeLeft}s</span>
+            </div>
+          ) : (
+            <div className="inline-block bg-slate-800 text-white px-8 py-4 rounded-full font-black text-3xl shadow-md">
+              Tempo Esgotado!
+            </div>
+          )}
+        </div>
+
+        <div className="grid grid-cols-2 gap-6 max-w-5xl w-full mx-auto">
           {question.options.map((opt, i) => {
             if (!opt) return null;
             const isCorrect = question.correct_answer === i;
-            const opacity = showResults ? (isCorrect ? 1 : 0.3) : 1;
+            const opacityClass = showResults ? (isCorrect ? 'opacity-100 scale-102 ring-4 ring-emerald-400' : 'opacity-25 grayscale') : 'opacity-100';
+
             return (
-              <div key={i} style={{ background: colors[i], color: '#fff', padding: '30px', fontSize: '28px', borderRadius: '12px', fontWeight: 'bold', opacity, transition: 'opacity 0.5s' }}>
-                {opt} {showResults && isCorrect && '✅'}
+              <div 
+                key={i} 
+                className={`${bgColors[i]} text-white p-8 rounded-2xl text-2xl font-black shadow-lg flex items-center justify-between transition-all ${opacityClass}`}
+              >
+                <span>{opt}</span>
+                {showResults && isCorrect && <span className="text-4xl bg-white text-emerald-600 p-2 rounded-full shadow">✅</span>}
               </div>
             );
           })}
         </div>
 
-        {showResults && (
-          <button onClick={nextQuestion} style={{ fontSize: '24px', padding: '15px 50px', background: '#007bff', color: '#fff', cursor: 'pointer', border: 'none', borderRadius: '8px', fontWeight: 'bold' }}>
-            {currentQIndex + 1 < questions.length ? 'Próxima Pergunta ➔' : 'Mostrar Pódio 🏆'}
-          </button>
-        )}
+        <div className="text-center mt-6 h-16">
+          {showResults && (
+            <button 
+              onClick={nextQuestion} 
+              className="px-10 py-4 text-2xl font-black bg-blue-600 hover:bg-blue-700 text-white rounded-2xl shadow-xl transition-all transform hover:scale-105 cursor-pointer"
+            >
+              {currentQIndex + 1 < questions.length ? 'Próxima Pergunta ➔' : 'Ver Pódio 🏆'}
+            </button>
+          )}
+        </div>
       </div>
     );
   }
 
-  // TELA LOBBY
+  // 4. LOBBY DE ESPERA
   return (
-    <div style={{ textAlign: 'center', marginTop: '50px', fontFamily: 'sans-serif' }}>
-      <h1>MetaQuiz</h1>
-      <h2 style={{ fontSize: '100px', margin: '10px 0', letterSpacing: '5px' }}>{quiz.pin}</h2>
-      <div style={{ background: '#eee', padding: '30px', borderRadius: '15px', maxWidth: '800px', margin: '40px auto', minHeight: '250px' }}>
-        <h3 style={{ margin: '0 0 20px 0' }}>Alunos na sala: {players.length}</h3>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '15px', justifyContent: 'center' }}>
-          {players.map(p => <div key={p.id} style={{ background: '#333', color: '#fff', padding: '10px 25px', borderRadius: '8px', fontSize: '22px', fontWeight: 'bold' }}>{p.name}</div>)}
+    <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-between p-8 font-sans">
+      <div className="text-center mt-4">
+        <h1 className="text-3xl font-extrabold text-blue-400 tracking-wider">METAQUIZ</h1>
+        <p className="text-slate-400 font-medium">Entre no sistema digitando o PIN:</p>
+        <div className="bg-white text-slate-950 font-black text-8xl tracking-widest py-6 px-12 rounded-3xl shadow-2xl mt-4 inline-block">
+          {quiz.pin}
         </div>
       </div>
-      <button onClick={startGame} style={{ fontSize: '24px', padding: '15px 60px', background: '#28a745', color: '#fff', cursor: 'pointer', border: 'none', borderRadius: '8px', fontWeight: 'bold' }}>
-        Iniciar Partida
+
+      <div className="bg-slate-800/80 border border-slate-700 p-8 rounded-3xl max-w-4xl w-full min-h-[300px] shadow-inner my-6">
+        <div className="flex justify-between items-center mb-6 border-b border-slate-700 pb-4">
+          <h3 className="text-xl font-bold text-slate-300">Alunos Conectados</h3>
+          <span className="bg-emerald-500/20 text-emerald-400 font-extrabold px-4 py-1 rounded-full text-lg border border-emerald-500/30">
+            {players.length} na sala
+          </span>
+        </div>
+
+        <div className="flex flex-wrap gap-4 justify-center">
+          {players.map((p) => (
+            <div key={p.id} className="bg-slate-700 text-white font-bold text-xl px-6 py-3 rounded-xl shadow-md border border-slate-600">
+              👤 {p.name}
+            </div>
+          ))}
+          {players.length === 0 && (
+            <p className="text-slate-500 text-lg my-auto">Aguardando alunos digitarem o PIN no celular...</p>
+          )}
+        </div>
+      </div>
+
+      <button 
+        onClick={startGame} 
+        className="px-12 py-5 text-3xl font-black bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-2xl shadow-xl transition-all transform hover:scale-105 cursor-pointer"
+      >
+        Iniciar Partida 🚀
       </button>
     </div>
   );
